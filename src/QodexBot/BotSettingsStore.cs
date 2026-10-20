@@ -15,6 +15,7 @@ internal sealed class BotSettingsStore(string filePath)
             ["current"] = "\\当前",
             ["rename"] = "\\标题",
             ["workdir"] = "\\工作目录",
+            ["switch-workspace"] = "\\切换工作区",
             ["screenshot"] = "\\截图",
             ["retry"] = "\\重试",
             ["stop"] = "\\停止",

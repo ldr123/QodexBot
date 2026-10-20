@@ -14,14 +14,14 @@ Console.CancelKeyPress += (_, eventArgs) =>
 var runtimeDirectory = AppContext.BaseDirectory;
 var settingsPath = Path.Combine(runtimeDirectory, "settings.json");
 var conversationsPath = Path.Combine(runtimeDirectory, "conversations.jsonl");
-var sessionsPath = Path.Combine(runtimeDirectory, "sessions.json");
+var statePath = Path.Combine(runtimeDirectory, "conversation-state.json");
 
 var settingsStore = new BotSettingsStore(settingsPath);
 await settingsStore.LoadAsync(shutdown.Token);
 var conversationStore = new ConversationStore(conversationsPath);
 await conversationStore.LoadAsync(shutdown.Token);
-var sessionStore = new BotSessionStore(sessionsPath);
-await sessionStore.LoadAsync(shutdown.Token);
+var stateStore = new BotConversationStateStore(statePath);
+await stateStore.LoadAsync(shutdown.Token);
 
 Console.WriteLine("QodexBot 管理服务启动中…");
 Console.WriteLine($"JSON 配置文件：{settingsStore.FilePath}");
@@ -33,6 +33,6 @@ Console.WriteLine($"管理页面已启动：{admin.DisplayUrl}");
 Console.WriteLine("管理服务仅监听本机地址；按 Ctrl+C 退出。\n");
 AdminWebServer.OpenBrowser(admin.DisplayUrl);
 
-var supervisor = new QqBotSupervisor(http, settingsStore, conversationStore, sessionStore);
+var supervisor = new QqBotSupervisor(http, settingsStore, conversationStore, stateStore);
 await supervisor.RunAsync(shutdown.Token);
 return 0;

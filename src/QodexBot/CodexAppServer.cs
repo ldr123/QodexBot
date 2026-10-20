@@ -4,7 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
-internal sealed class CodexAppServer : IAsyncDisposable
+internal sealed class CodexAppServer : IAsyncDisposable, ICodexSessionClient
 {
     public const string DefaultModel = "gpt-6-luna";
     private readonly string _cliScript = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
@@ -17,13 +17,14 @@ internal sealed class CodexAppServer : IAsyncDisposable
     private readonly SemaphoreSlim _turnLock = new(1, 1);
     private Process? _process;
     private Task? _readerTask;
-    private string? _threadId;
+    private bool _initialized;
     private int _nextRequestId;
     private StringBuilder? _activeReply;
     private StringBuilder? _activeReasoningSummary;
     private ConcurrentQueue<CodexImage>? _activeImages;
     private TaskCompletionSource<string>? _activeTurn;
     private string? _activeTurnId;
+    private string? _activeThreadId;
     private string? _mcpPipeName;
     private ReplyContext? _activeToolContext;
     public CodexAppServer(string botId = "default")
@@ -32,7 +33,7 @@ internal sealed class CodexAppServer : IAsyncDisposable
         _workDirectory = Path.Combine(Path.GetTempPath(), "QodexBot", "bots", safeBotId);
     }
     public ReplyContext? ActiveToolContext => Volatile.Read(ref _activeToolContext);
-    public string? DefaultThreadId => _threadId;
+    public bool IsStarted => _process is { HasExited: false } && _initialized;
     public string WorkDirectory => _workDirectory;
 
     public void SetMcpPipeName(string pipeName) => _mcpPipeName = pipeName;
@@ -40,11 +41,11 @@ internal sealed class CodexAppServer : IAsyncDisposable
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        if (_process is { HasExited: false } && _threadId is not null) return;
+        if (IsStarted) return;
         await _startLock.WaitAsync(cancellationToken);
         try
         {
-            if (_process is { HasExited: false } && _threadId is not null) return;
+            if (IsStarted) return;
             if (!File.Exists(_cliScript)) throw new FileNotFoundException("没有找到本机 Codex CLI", _cliScript);
             Directory.CreateDirectory(_workDirectory);
             Directory.CreateDirectory(Path.Combine(_workDirectory, "qq-outbox"));
@@ -102,11 +103,8 @@ internal sealed class CodexAppServer : IAsyncDisposable
                 ["capabilities"] = new JsonObject()
             }, cancellationToken);
             await SendNotificationAsync("initialized", new JsonObject(), cancellationToken);
-            var threadResult = await SendRequestAsync("thread/start", BuildThreadStartParams(), cancellationToken);
-            _threadId = threadResult.GetProperty("thread").GetProperty("id").GetString()
-                ?? throw new InvalidOperationException("Codex app-server 没有返回 thread id。");
-            _liveThreads.TryAdd(_threadId, 0);
-            Console.WriteLine($"常驻 Codex CLI 已启动，会话：{_threadId}");
+            _initialized = true;
+            Console.WriteLine("常驻 Codex CLI 已启动。");
             Console.WriteLine("已启用 Codex MCP 工具：qq_capture_screen、qq_send_image、qq_ask_user、qq_input。");
         }
         catch
@@ -117,10 +115,12 @@ internal sealed class CodexAppServer : IAsyncDisposable
         finally { _startLock.Release(); }
     }
 
-    public async Task<string> CreateThreadAsync(CancellationToken cancellationToken)
+    public Task<string> CreateThreadAsync(CancellationToken cancellationToken) => CreateThreadAsync(_workDirectory, cancellationToken);
+
+    public async Task<string> CreateThreadAsync(string workDirectory, CancellationToken cancellationToken)
     {
         await StartAsync(cancellationToken);
-        var result = await SendRequestAsync("thread/start", BuildThreadStartParams(), cancellationToken);
+        var result = await SendRequestAsync("thread/start", BuildThreadStartParams(workDirectory), cancellationToken);
         var threadId = result.GetProperty("thread").GetProperty("id").GetString()
             ?? throw new InvalidOperationException("Codex app-server 没有返回新会话 ID。");
         _liveThreads.TryAdd(threadId, 0);
@@ -148,6 +148,86 @@ internal sealed class CodexAppServer : IAsyncDisposable
             .Where(model => model is not null)
             .Cast<CodexModel>()
             .ToArray();
+    }
+
+    public async Task<IReadOnlyList<CodexThreadSummary>> ListThreadsAsync(string workDirectory, CancellationToken cancellationToken)
+    {
+        await StartAsync(cancellationToken);
+        var threads = new Dictionary<string, CodexThreadSummary>(StringComparer.Ordinal);
+        var cursors = new HashSet<string>(StringComparer.Ordinal);
+        string? cursor = null;
+        do
+        {
+            var result = await SendRequestAsync("thread/list", BuildThreadListParams(workDirectory, cursor), cancellationToken);
+            var page = ParseThreadList(result, workDirectory);
+            foreach (var thread in page.Threads) threads[thread.Id] = thread;
+            cursor = page.NextCursor;
+            if (cursor is not null && !cursors.Add(cursor)) throw new InvalidOperationException("Codex 会话列表返回了重复的分页游标。");
+        } while (cursor is not null);
+        return threads.Values.OrderByDescending(thread => thread.UpdatedAt).ToArray();
+    }
+
+    internal static JsonObject BuildThreadListParams(string workDirectory, string? cursor) => new()
+    {
+        ["cwd"] = WorkspacePath.Normalize(workDirectory),
+        ["limit"] = 100,
+        ["cursor"] = cursor,
+        ["sortKey"] = "updated_at",
+        ["sortDirection"] = "desc",
+        ["archived"] = false,
+        // An omitted provider filter can hide history from another configured provider.
+        ["modelProviders"] = new JsonArray(),
+        ["sourceKinds"] = new JsonArray("cli", "vscode", "appServer", "exec", "unknown")
+    };
+
+    public async Task<CodexThreadSummary?> ReadThreadAsync(string threadId, string workDirectory, CancellationToken token)
+    {
+        await StartAsync(token);
+        try
+        {
+            var result = await SendRequestAsync("thread/read", new JsonObject { ["threadId"] = threadId, ["includeTurns"] = false }, token);
+            return result.TryGetProperty("thread", out var thread) ? ParseThreadSummary(thread, workDirectory) : null;
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("no rollout found", StringComparison.OrdinalIgnoreCase)
+            || ex.Message.Contains("thread not found", StringComparison.OrdinalIgnoreCase)) { return null; }
+    }
+
+    public async Task SetThreadNameAsync(string threadId, string name, CancellationToken token)
+    {
+        await StartAsync(token);
+        await SendRequestAsync("thread/name/set", new JsonObject { ["threadId"] = threadId, ["name"] = name }, token);
+    }
+
+    internal static CodexThreadSummary? ParseThreadSummary(JsonElement item, string workDirectory)
+    {
+        static string? ReadString(JsonElement item, string name) => item.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+        var id = ReadString(item, "id");
+        var cwd = ReadString(item, "cwd");
+        if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(cwd) || !WorkspacePath.Matches(cwd, workDirectory)) return null;
+        if (item.TryGetProperty("ephemeral", out var ephemeral) && ephemeral.ValueKind == JsonValueKind.True) return null;
+        var name = ReadString(item, "name");
+        if (string.IsNullOrWhiteSpace(name)) name = ReadString(item, "preview");
+        if (string.IsNullOrWhiteSpace(name)) name = $"未命名会话（{id[..Math.Min(8, id.Length)]}）";
+        var updatedAt = DateTimeOffset.UnixEpoch;
+        if (item.TryGetProperty("updatedAt", out var updated) && updated.ValueKind == JsonValueKind.Number && updated.TryGetInt64(out var timestamp))
+        {
+            try { updatedAt = DateTimeOffset.FromUnixTimeSeconds(timestamp); }
+            catch (ArgumentOutOfRangeException) { }
+        }
+        return new(id, name, WorkspacePath.Normalize(cwd), updatedAt);
+    }
+
+    internal static CodexThreadPage ParseThreadList(JsonElement result, string workDirectory)
+    {
+        if (!result.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Array)
+            throw new InvalidOperationException("Codex CLI 返回的会话列表格式不正确。");
+        var threads = new List<CodexThreadSummary>();
+        foreach (var item in data.EnumerateArray())
+        {
+            if (ParseThreadSummary(item, workDirectory) is { } thread) threads.Add(thread);
+        }
+        var nextCursor = result.TryGetProperty("nextCursor", out var next) && next.ValueKind == JsonValueKind.String ? next.GetString() : null;
+        return new(threads, string.IsNullOrEmpty(nextCursor) ? null : nextCursor);
     }
 
     public async Task<string> UpdateCliAsync(CancellationToken cancellationToken)
@@ -189,12 +269,26 @@ internal sealed class CodexAppServer : IAsyncDisposable
 
     private static string TruncateOutput(string output) => output.Length <= 700 ? output : output[..700] + "…";
 
-    public async Task ResumeThreadAsync(string threadId, CancellationToken cancellationToken)
+    public async Task ResumeThreadAsync(string threadId, CancellationToken cancellationToken, string? workDirectory = null)
     {
         await StartAsync(cancellationToken);
         // 新 thread 在第一轮 turn 写出 rollout 前无法 resume；它已由当前 app-server 持有。
         if (_liveThreads.ContainsKey(threadId)) return;
-        await SendRequestAsync("thread/resume", new JsonObject { ["threadId"] = threadId }, cancellationToken);
+        await SendRequestAsync("thread/resume", BuildThreadResumeParams(threadId, workDirectory), cancellationToken);
+        _liveThreads.TryAdd(threadId, 0);
+    }
+
+    internal JsonObject BuildThreadResumeParams(string threadId, string? workDirectory)
+    {
+        var parameters = new JsonObject
+        {
+            ["threadId"] = threadId,
+            ["approvalPolicy"] = "never",
+            ["sandbox"] = "danger-full-access",
+            ["developerInstructions"] = BuildThreadStartParams(workDirectory)["developerInstructions"]!.GetValue<string>()
+        };
+        if (!string.IsNullOrWhiteSpace(workDirectory)) parameters["cwd"] = workDirectory;
+        return parameters;
     }
 
     public async Task InterruptTurnAsync(string threadId, CancellationToken cancellationToken)
@@ -208,9 +302,9 @@ internal sealed class CodexAppServer : IAsyncDisposable
         }, cancellationToken);
     }
 
-    private JsonObject BuildThreadStartParams() => new()
+    internal JsonObject BuildThreadStartParams(string? workDirectory = null) => new()
     {
-        ["cwd"] = _workDirectory,
+        ["cwd"] = workDirectory ?? _workDirectory,
         ["model"] = DefaultModel,
         ["approvalPolicy"] = "never",
         ["sandbox"] = "danger-full-access",
@@ -220,7 +314,20 @@ internal sealed class CodexAppServer : IAsyncDisposable
             "面向 QQ 的自然语言回复使用 QQ 支持的 Markdown 子集：需要时用简短标题、**粗体**、_斜体_、~~删除线~~、有序或无序列表、引用和 Markdown 链接；简单问答保持简洁，不要为了格式而堆叠标题。不要使用表格、HTML、代码围栏、嵌套列表等未确认支持的语法；代码示例请用纯文本分行表达。只提供确有必要且平台已允许的链接，不要臆造 URL。"
     };
 
-    public async Task<CodexTurnReply> AskAsync(string threadId, string userMessage, string? model, CancellationToken cancellationToken)
+    internal static JsonObject BuildTurnStartParams(string threadId, string userMessage, string? model, string? workDirectory)
+    {
+        var parameters = new JsonObject
+        {
+            ["threadId"] = threadId,
+            ["input"] = new JsonArray(new JsonObject { ["type"] = "text", ["text"] = userMessage })
+        };
+        if (!string.IsNullOrWhiteSpace(model)) parameters["model"] = model;
+        if (!string.IsNullOrWhiteSpace(workDirectory)) parameters["cwd"] = workDirectory;
+        return parameters;
+    }
+
+    public async Task<CodexTurnReply> AskAsync(string threadId, string userMessage, string? model, CancellationToken cancellationToken,
+        string? workDirectory = null)
     {
         await _turnLock.WaitAsync(cancellationToken);
         try
@@ -230,16 +337,8 @@ internal sealed class CodexAppServer : IAsyncDisposable
             _activeReasoningSummary = new StringBuilder();
             _activeImages = new ConcurrentQueue<CodexImage>();
             _activeTurn = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var parameters = new JsonObject
-            {
-                ["threadId"] = threadId,
-                ["input"] = new JsonArray(new JsonObject
-                {
-                    ["type"] = "text",
-                    ["text"] = userMessage
-                })
-            };
-            if (!string.IsNullOrWhiteSpace(model)) parameters["model"] = model;
+            _activeThreadId = threadId;
+            var parameters = BuildTurnStartParams(threadId, userMessage, model, workDirectory);
             var started = await SendRequestAsync("turn/start", parameters, cancellationToken);
             _activeTurnId = started.TryGetProperty("turn", out var turn) && turn.TryGetProperty("id", out var turnId)
                 ? turnId.GetString() : null;
@@ -255,8 +354,23 @@ internal sealed class CodexAppServer : IAsyncDisposable
         }
         finally
         {
+            // Finish a cancelled/timed-out turn before the next queued request starts;
+            // otherwise its later output and MCP calls could target the next user.
+            if (_activeTurn is { Task.IsCompleted: false } activeTurn)
+            {
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                try
+                {
+                    await InterruptTurnAsync(threadId, cleanup.Token);
+                    await activeTurn.Task.WaitAsync(cleanup.Token);
+                }
+                catch (Exception ex) when (ex is OperationCanceledException or InvalidOperationException or TimeoutException)
+                { Console.Error.WriteLine($"清理 Codex 任务：{ex.Message}"); }
+                if (!activeTurn.Task.IsCompleted) await StopProcessAsync();
+            }
             _activeTurn = null;
             _activeTurnId = null;
+            _activeThreadId = null;
             _activeReply = null;
             _activeReasoningSummary = null;
             _activeImages = null;
@@ -272,8 +386,12 @@ internal sealed class CodexAppServer : IAsyncDisposable
         var completion = new TaskCompletionSource<JsonElement>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pending[key] = completion;
         var parameterElement = JsonSerializer.SerializeToElement(parameters, AppJsonContext.Default.JsonObject);
-        await WriteMessageAsync(new JsonRpcMessage("2.0", id, method, parameterElement), cancellationToken);
-        return await completion.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+        try
+        {
+            await WriteMessageAsync(new JsonRpcMessage("2.0", id, method, parameterElement), cancellationToken);
+            return await completion.Task.WaitAsync(TimeSpan.FromMinutes(2), cancellationToken);
+        }
+        finally { _pending.TryRemove(key, out _); }
     }
 
     private Task SendNotificationAsync(string method, JsonObject parameters, CancellationToken cancellationToken)
@@ -320,6 +438,8 @@ internal sealed class CodexAppServer : IAsyncDisposable
                 if (!root.TryGetProperty("method", out var methodElement) ||
                     !root.TryGetProperty("params", out var parameters)) continue;
                 var method = methodElement.GetString();
+                if (parameters.TryGetProperty("threadId", out var eventThread) &&
+                    eventThread.GetString() != _activeThreadId) continue;
                 if (method == "item/completed" && parameters.TryGetProperty("item", out var completedItem))
                 {
                     CaptureImage(completedItem);
@@ -384,6 +504,9 @@ internal sealed class CodexAppServer : IAsyncDisposable
                     }
                 }
             }
+            var exited = new InvalidOperationException("Codex app-server 已断开。");
+            foreach (var pending in _pending.Values) pending.TrySetException(exited);
+            _activeTurn?.TrySetException(exited);
             if (process.ExitCode != 0) throw new InvalidOperationException($"Codex app-server 退出，代码 {process.ExitCode}。");
         }
         catch (Exception ex)
@@ -497,10 +620,11 @@ internal sealed class CodexAppServer : IAsyncDisposable
         catch (InvalidOperationException) { }
         finally
         {
+            if (_readerTask is not null) await _readerTask;
             _process.Dispose();
             _process = null;
             _readerTask = null;
-            _threadId = null;
+            _initialized = false;
             _liveThreads.Clear();
         }
     }

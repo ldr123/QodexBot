@@ -21,8 +21,7 @@ internal partial class WebJsonContext : JsonSerializerContext
 }
 
 [JsonSerializable(typeof(ConversationRecord))]
-[JsonSerializable(typeof(BotSession))]
-[JsonSerializable(typeof(List<BotSession>))]
+[JsonSerializable(typeof(Dictionary<string, BotConversationState>))]
 [JsonSerializable(typeof(ConversationPage))]
 [JsonSerializable(typeof(JsonRpcMessage))]
 [JsonSerializable(typeof(JsonObject))]

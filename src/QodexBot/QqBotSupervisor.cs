@@ -2,7 +2,7 @@ internal sealed class QqBotSupervisor(
     HttpClient http,
     BotSettingsStore settingsStore,
     ConversationStore conversationStore,
-    BotSessionStore sessionStore)
+    BotConversationStateStore stateStore)
 {
     private readonly Dictionary<string, ActiveBot> m_activeBots = new(StringComparer.Ordinal);
 
@@ -42,7 +42,7 @@ internal sealed class QqBotSupervisor(
                 active.Codex = new CodexAppServer(botId);
                 active.Mcp = new LocalToolIpcServer();
                 await active.Mcp.StartAsync().ConfigureAwait(false);
-                var bot = new QqBotClient(http, config, active.Codex, active.Mcp, conversationStore, sessionStore,
+                var bot = new QqBotClient(http, config, active.Codex, active.Mcp, conversationStore, stateStore,
                     () => settingsStore.GetBot(config.BotId)?.CommandBindings ?? BotSettingsStore.DefaultCommandBindings,
                     () => settingsStore.GetBotRuntimeStatus(botId), status => settingsStore.SetBotRuntimeStatus(botId, status));
                 active.RunTask = bot.RunAsync(active.Cancellation.Token);

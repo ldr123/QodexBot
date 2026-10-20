@@ -72,7 +72,7 @@ internal sealed class ConversationStore
     }
 
     /// <summary>
-    /// 读取按时间正序排列的一页对话事件。
+    /// 读取按时间倒序排列的一页对话事件；相同时间按 ID 倒序排列。
     /// </summary>
     public ConversationPage GetPage(long? beforeId, int limit, string? userOpenId, bool exactUserMatch = false, string? botId = null)
     {
@@ -81,15 +81,23 @@ internal sealed class ConversationStore
         {
             IEnumerable<ConversationRecord> query = this.m_records;
             if (!string.IsNullOrWhiteSpace(botId)) query = query.Where(record => record.BotId == botId);
-            if (beforeId.HasValue) query = query.Where(record => record.Id < beforeId.Value);
+            if (beforeId.HasValue)
+            {
+                var anchor = this.m_records.FirstOrDefault(record => record.Id == beforeId.Value);
+                query = anchor is null
+                    ? query.Where(record => record.Id < beforeId.Value)
+                    : query.Where(record => record.Timestamp < anchor.Timestamp ||
+                        record.Timestamp == anchor.Timestamp && record.Id < anchor.Id);
+            }
             if (!string.IsNullOrWhiteSpace(userOpenId))
                 query = query.Where(record => exactUserMatch
                     ? string.Equals(record.UserOpenId, userOpenId, StringComparison.Ordinal)
                     : record.UserOpenId.Contains(userOpenId, StringComparison.OrdinalIgnoreCase));
-            var matching = query.ToArray();
-            var records = matching.TakeLast(limit).ToArray();
-            return new ConversationPage(records, matching.Length > records.Length,
-                records.Length == 0 ? null : records[0].Id);
+            var matching = query.OrderByDescending(record => record.Timestamp).ThenByDescending(record => record.Id)
+                .Take(limit + 1).ToArray();
+            var records = matching.Take(limit).ToArray();
+            return new ConversationPage(records, matching.Length > limit,
+                records.Length == 0 ? null : records[^1].Id);
         }
     }
 
