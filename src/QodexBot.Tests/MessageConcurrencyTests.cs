@@ -49,15 +49,15 @@ public sealed class MessageConcurrencyTests
     }
 
     [Theory]
-    [InlineData("\\", "可用指令")]
-    [InlineData("\\状态", "机器人：")]
-    [InlineData("\\会话", "项目会话")]
-    [InlineData("\\最近", "暂无对话记录")]
-    [InlineData("\\工作目录", "当前工作目录")]
-    [InlineData("\\标题 新名称", "会话已命名为：新名称")]
-    [InlineData("\\切换 1", "已切换到会话")]
-    [InlineData("\\停止", "当前没有正在运行的任务")]
-    [InlineData("\\截图", "截图已发送")]
+    [InlineData("/", "可用指令")]
+    [InlineData("/状态", "机器人：")]
+    [InlineData("/会话", "项目会话")]
+    [InlineData("/最近", "暂无对话记录")]
+    [InlineData("/工作目录", "当前工作目录")]
+    [InlineData("/标题 新名称", "会话已命名为：新名称")]
+    [InlineData("/切换 1", "已切换到会话")]
+    [InlineData("/停止", "当前没有正在运行的任务")]
+    [InlineData("/截图", "截图已发送")]
     public async Task LocalCommand_RespondsWhileMessagesAndRetryAreQueued_WithoutReplacingActiveContext(string command, string expected)
     {
         var directory = Path.Combine(Path.GetTempPath(), "qodex-queue-test-" + Guid.NewGuid().ToString("N"));
@@ -84,7 +84,7 @@ public sealed class MessageConcurrencyTests
             () => BotSettingsStore.DefaultCommandBindings, () => "test", _ => { }, queue,
             projectSessions: sessions);
         var message = client.HandleMessageAsync(Message("normal", "普通消息"), shutdown.Token);
-        var retry = client.HandleMessageAsync(Message("retry", "\\重试"), shutdown.Token);
+        var retry = client.HandleMessageAsync(Message("retry", "/重试"), shutdown.Token);
         try
         {
             await client.HandleMessageAsync(Message("command", command), shutdown.Token).WaitAsync(TimeSpan.FromSeconds(5));

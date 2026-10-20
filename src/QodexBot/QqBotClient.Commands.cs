@@ -28,7 +28,7 @@ internal sealed partial class QqBotClient
     private async Task ShowProjectSessionsAsync(string argument, ReplyContext context, CancellationToken token)
     {
         var bindings = getCommandBindings();
-        var command = bindings.GetValueOrDefault("sessions", "\\会话");
+        var command = bindings.GetValueOrDefault("sessions", "/会话");
         if (!TryReadPage(argument, out var pageNumber))
         {
             await SendTextReplyAsync(context, $"用法：{command} [页码]，例如：{command} 2。", token);
@@ -106,7 +106,7 @@ internal sealed partial class QqBotClient
     private async Task ShowModelsAsync(string argument, ReplyContext context, CancellationToken token)
     {
         var bindings = getCommandBindings();
-        var command = bindings.GetValueOrDefault("models", "\\模型列表");
+        var command = bindings.GetValueOrDefault("models", "/模型列表");
         if (!TryReadPage(argument, out var pageNumber))
         {
             await SendTextReplyAsync(context, $"用法：{command} [页码]，例如：{command} 2。", token);

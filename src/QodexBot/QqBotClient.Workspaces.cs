@@ -5,7 +5,7 @@ internal sealed partial class QqBotClient
         if (string.IsNullOrWhiteSpace(argument))
         {
             var current = await stateStore.GetAsync(SessionOwner(context.UserOpenId), codex.WorkDirectory, token);
-            var command = getCommandBindings().GetValueOrDefault("switch-workspace", "\\切换工作区");
+            var command = getCommandBindings().GetValueOrDefault("switch-workspace", "/切换工作区");
             await SendTextReplyAsync(context, $"当前工作区：{current.WorkDirectory}\n用法：{command} 绝对路径\n例如：{command} D:\\OpenCode\\项目名称", token);
             return;
         }

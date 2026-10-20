@@ -274,7 +274,7 @@ internal sealed partial class QqBotClient(HttpClient http, BotConfig config, Cod
             }
         }
 
-        if (content.TrimStart().StartsWith('\\'))
+        if (content.TrimStart().StartsWith('/'))
         {
             var help = getCommandBindings().GetValueOrDefault("help");
             await SendTextReplyAsync(context, "未识别的指令。" + (string.IsNullOrWhiteSpace(help) ? "" : $"发送 {help} 查看可用指令。"), cancellationToken);
@@ -376,7 +376,7 @@ internal sealed partial class QqBotClient(HttpClient http, BotConfig config, Cod
                 break;
             case "switch-session":
             {
-                if (!int.TryParse(argument, out var index)) { response = "请在切换命令后加列表编号，例如：" + bindings.GetValueOrDefault(command, "\\切换") + " 2"; break; }
+                if (!int.TryParse(argument, out var index)) { response = "请在切换命令后加列表编号，例如：" + bindings.GetValueOrDefault(command, "/切换") + " 2"; break; }
                 var session = await GetSessionChoiceAsync(context, index, cancellationToken);
                 if (session is null) { response = "没有这个编号。先查看会话列表，再输入切换命令和编号。"; break; }
                 await stateStore.SelectThreadAsync(userId, session, cancellationToken);
@@ -397,11 +397,11 @@ internal sealed partial class QqBotClient(HttpClient http, BotConfig config, Cod
             case "current":
             {
                 var session = await ReadCurrentThreadAsync(context, cancellationToken);
-                response = session is null ? $"尚未选择项目会话。发送 {bindings.GetValueOrDefault("sessions", "\\会话")} 查看，或发送 {bindings.GetValueOrDefault("new-session", "\\新建")} 新建会话。" : $"当前会话：{session.Name}";
+                response = session is null ? $"尚未选择项目会话。发送 {bindings.GetValueOrDefault("sessions", "/会话")} 查看，或发送 {bindings.GetValueOrDefault("new-session", "/新建")} 新建会话。" : $"当前会话：{session.Name}";
                 break;
             }
             case "rename":
-                if (string.IsNullOrWhiteSpace(argument)) { response = $"用法：{bindings.GetValueOrDefault("rename", "\\标题")} 新名称"; break; }
+                if (string.IsNullOrWhiteSpace(argument)) { response = $"用法：{bindings.GetValueOrDefault("rename", "/标题")} 新名称"; break; }
                 if (argument.Trim().Length > 64) { response = "会话名称不能超过 64 个字符。"; break; }
                 var active = await ReadCurrentThreadAsync(context, cancellationToken);
                 if (active is null) { response = "当前没有会话。"; break; }
@@ -419,7 +419,7 @@ internal sealed partial class QqBotClient(HttpClient http, BotConfig config, Cod
                 var session = await stateStore.GetAsync(userId, codex.WorkDirectory, cancellationToken);
                 if (string.IsNullOrWhiteSpace(argument))
                 {
-                    response = $"当前模型：{session.Model ?? CodexAppServer.DefaultModel}。查看模型请发送 {bindings.GetValueOrDefault("models", "\\模型列表")}；切换时可输入模型名称或列表编号。";
+                    response = $"当前模型：{session.Model ?? CodexAppServer.DefaultModel}。查看模型请发送 {bindings.GetValueOrDefault("models", "/模型列表")}；切换时可输入模型名称或列表编号。";
                     break;
                 }
                 var models = await codex.ListModelsAsync(cancellationToken);
@@ -430,7 +430,7 @@ internal sealed partial class QqBotClient(HttpClient http, BotConfig config, Cod
                         || string.Equals(model.DisplayName, requested, StringComparison.OrdinalIgnoreCase));
                 if (selected is null)
                 {
-                    response = $"找不到模型“{requested}”。先发送 {bindings.GetValueOrDefault("models", "\\模型列表")} 查看可用模型。";
+                    response = $"找不到模型“{requested}”。先发送 {bindings.GetValueOrDefault("models", "/模型列表")} 查看可用模型。";
                     break;
                 }
                 await stateStore.SetModelAsync(userId, codex.WorkDirectory, selected.Model, cancellationToken);
@@ -474,7 +474,7 @@ internal sealed partial class QqBotClient(HttpClient http, BotConfig config, Cod
         var workDirectory = session.WorkDirectory;
         if (!Directory.Exists(workDirectory))
         {
-            await SendTextReplyAsync(context, $"工作区目录已不存在：{workDirectory}\n请使用 {getCommandBindings().GetValueOrDefault("switch-workspace", "\\切换工作区")} 绝对路径 切换工作区。", cancellationToken);
+            await SendTextReplyAsync(context, $"工作区目录已不存在：{workDirectory}\n请使用 {getCommandBindings().GetValueOrDefault("switch-workspace", "/切换工作区")} 绝对路径 切换工作区。", cancellationToken);
             return;
         }
         if (session.ThreadId is null)
@@ -486,7 +486,7 @@ internal sealed partial class QqBotClient(HttpClient http, BotConfig config, Cod
         try { await codex.ResumeThreadAsync(session.ThreadId, cancellationToken, workDirectory); }
         catch (InvalidOperationException ex) when (ex.Message.Contains("no rollout found", StringComparison.OrdinalIgnoreCase))
         {
-            await SendTextReplyAsync(context, $"选中的 Codex 会话已无法恢复，请发送 {getCommandBindings().GetValueOrDefault("sessions", "\\会话")} 重新查看并选择，或新建会话。", cancellationToken);
+            await SendTextReplyAsync(context, $"选中的 Codex 会话已无法恢复，请发送 {getCommandBindings().GetValueOrDefault("sessions", "/会话")} 重新查看并选择，或新建会话。", cancellationToken);
             return;
         }
         codex.SetActiveToolContext(context);

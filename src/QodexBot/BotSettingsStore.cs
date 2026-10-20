@@ -6,22 +6,22 @@ internal sealed class BotSettingsStore(string filePath)
     internal static readonly IReadOnlyDictionary<string, string> DefaultCommandBindings =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["help"] = "\\",
-            ["status"] = "\\状态",
-            ["sessions"] = "\\会话",
-            ["switch-session"] = "\\切换",
-            ["new-session"] = "\\新建",
-            ["recent"] = "\\最近",
-            ["current"] = "\\当前",
-            ["rename"] = "\\标题",
-            ["workdir"] = "\\工作目录",
-            ["switch-workspace"] = "\\切换工作区",
-            ["screenshot"] = "\\截图",
-            ["retry"] = "\\重试",
-            ["stop"] = "\\停止",
-            ["models"] = "\\模型列表",
-            ["switch-model"] = "\\模型",
-            ["update-codex"] = "\\更新Codex",
+            ["help"] = "/",
+            ["status"] = "/状态",
+            ["sessions"] = "/会话",
+            ["switch-session"] = "/切换",
+            ["new-session"] = "/新建",
+            ["recent"] = "/最近",
+            ["current"] = "/当前",
+            ["rename"] = "/标题",
+            ["workdir"] = "/工作目录",
+            ["switch-workspace"] = "/切换工作区",
+            ["screenshot"] = "/截图",
+            ["retry"] = "/重试",
+            ["stop"] = "/停止",
+            ["models"] = "/模型列表",
+            ["switch-model"] = "/模型",
+            ["update-codex"] = "/更新Codex",
         };
 
     private readonly object m_sync = new();
@@ -64,6 +64,11 @@ internal sealed class BotSettingsStore(string filePath)
                         settings.AppId = string.Empty;
                         settings.AppSecret = string.Empty;
                     }
+                    settings.CommandBindings = MigrateLegacyCommandBindings(settings.CommandBindings);
+                    settings.Bots = settings.Bots.Select(bot => bot with
+                    {
+                        CommandBindings = MigrateLegacyCommandBindings(bot.CommandBindings)
+                    }).ToList();
                     this.m_settings = settings;
                 }
             }
@@ -328,6 +333,19 @@ internal sealed class BotSettingsStore(string filePath)
     private BotSettingsView ToView(BotProfileDocument bot, int adminPort) => new(bot.Id, bot.Name, bot.AppId, bot.Sandbox,
         bot.SubscribeC2cMessages, bot.SubscribeGroupMessages, adminPort, !string.IsNullOrEmpty(bot.AppSecret), !string.IsNullOrEmpty(bot.AppId) && !string.IsNullOrEmpty(bot.AppSecret),
         string.Empty, NormalizeCommandBindings(bot.CommandBindings), GetBotRuntimeStatus(bot.Id));
+
+    private static Dictionary<string, string> MigrateLegacyCommandBindings(Dictionary<string, string>? supplied)
+    {
+        var result = NormalizeCommandBindings(supplied);
+        foreach (var (key, command) in DefaultCommandBindings)
+        {
+            // Only migrate the old default; preserve custom and disabled bindings.
+            if (result[key] == "\\" + command[1..] && !result.Any(pair => pair.Key != key &&
+                string.Equals(pair.Value, command, StringComparison.OrdinalIgnoreCase)))
+                result[key] = command;
+        }
+        return result;
+    }
 
     private static Dictionary<string, string> NormalizeCommandBindings(Dictionary<string, string>? supplied)
     {

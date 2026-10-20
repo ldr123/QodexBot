@@ -12,18 +12,18 @@ public sealed class QqCommandTests
     public async Task HelpAndMissingArguments_DoNotCreateFollowupInputStates()
     {
         await using var fixture = await Fixture.CreateAsync();
-        await fixture.SendAsync("\\");
+        await fixture.SendAsync("/");
         Assert.Contains("可用指令", fixture.LastText);
-        Assert.Contains("\\标题 新名称", fixture.LastText);
+        Assert.Contains("/标题 新名称", fixture.LastText);
         Assert.DoesNotContain("回复数字", fixture.LastText);
-        await fixture.SendAsync("\\切换");
+        await fixture.SendAsync("/切换");
         Assert.Contains("切换命令后加列表编号", fixture.LastText);
-        await fixture.SendAsync("\\标题");
-        Assert.Contains("用法：\\标题 新名称", fixture.LastText);
+        await fixture.SendAsync("/标题");
+        Assert.Contains("用法：/标题 新名称", fixture.LastText);
         Assert.False(fixture.Send("新的标题").IsCompleted);
         Assert.Equal("会话 A", fixture.Sessions.Threads[0].Name);
-        await fixture.SendAsync("\\切换工作区");
-        Assert.Contains("用法：\\切换工作区 绝对路径", fixture.LastText);
+        await fixture.SendAsync("/切换工作区");
+        Assert.Contains("用法：/切换工作区 绝对路径", fixture.LastText);
     }
 
     [Fact]
@@ -34,17 +34,17 @@ public sealed class QqCommandTests
         for (var index = 0; index < 62; index++)
             fixture.Sessions.Threads.Add(new($"external-{index}", $"项目会话 {index}", fixture.Codex.WorkDirectory, DateTimeOffset.UtcNow.AddMinutes(-index)));
         fixture.Sessions.Threads.Add(new("other", "其它项目", fixture.DirectoryPath, DateTimeOffset.UtcNow));
-        await fixture.SendAsync("\\会话");
+        await fixture.SendAsync("/会话");
         Assert.Contains("1/7 页，共 62 项", fixture.LastText);
         Assert.DoesNotContain("其它项目", fixture.LastText);
         Assert.Contains(fixture.Codex.WorkDirectory, fixture.Sessions.Requests);
-        await fixture.SendAsync("\\会话 2");
+        await fixture.SendAsync("/会话 2");
         Assert.Contains("2/7 页", fixture.LastText);
         Assert.Contains("11. 项目会话 10", fixture.LastText);
-        await fixture.SendAsync("\\切换 11");
+        await fixture.SendAsync("/切换 11");
         Assert.Equal("external-10", (await fixture.SelectionAsync()).ThreadId);
         Assert.Contains("已切换到会话：项目会话 10", fixture.LastText);
-        await fixture.SendAsync("\\切换 2");
+        await fixture.SendAsync("/切换 2");
         Assert.Equal("external-1", (await fixture.SelectionAsync()).ThreadId);
     }
 
@@ -54,10 +54,10 @@ public sealed class QqCommandTests
         await using var fixture = await Fixture.CreateAsync();
         var thread = new CodexThreadSummary("thread-b", "会话 B", fixture.Codex.WorkDirectory, DateTimeOffset.UtcNow.AddMinutes(1));
         fixture.Sessions.Threads.Add(thread);
-        await fixture.SendAsync("\\会话");
+        await fixture.SendAsync("/会话");
         Assert.Contains("1. 会话 B", fixture.LastText);
         fixture.Sessions.Threads[0] = fixture.Sessions.Threads[0] with { UpdatedAt = DateTimeOffset.UtcNow.AddMinutes(2) };
-        await fixture.SendAsync("\\切换 1");
+        await fixture.SendAsync("/切换 1");
         Assert.Equal("thread-b", (await fixture.SelectionAsync()).ThreadId);
     }
 
@@ -65,11 +65,11 @@ public sealed class QqCommandTests
     public async Task RenameAndNewSession_UpdateCodexHistoryDirectly()
     {
         await using var fixture = await Fixture.CreateAsync();
-        await fixture.SendAsync("\\标题 " + new string('a', 65));
+        await fixture.SendAsync("/标题 " + new string('a', 65));
         Assert.Contains("不能超过 64 个字符", fixture.LastText);
-        await fixture.SendAsync("\\标题 新的工作会话");
+        await fixture.SendAsync("/标题 新的工作会话");
         Assert.Equal("新的工作会话", fixture.Sessions.Threads.Single(thread => thread.Id == "thread-a").Name);
-        await fixture.SendAsync("\\新建 编译问题");
+        await fixture.SendAsync("/新建 编译问题");
         var selected = await fixture.SelectionAsync();
         Assert.Equal("编译问题", fixture.Sessions.Threads.Single(thread => thread.Id == selected.ThreadId).Name);
         Assert.Equal(fixture.Codex.WorkDirectory, selected.WorkDirectory);
@@ -83,26 +83,38 @@ public sealed class QqCommandTests
     public async Task BareNumbersAndMenuWords_RemainOrdinaryMessages()
     {
         await using var fixture = await Fixture.CreateAsync();
-        await fixture.SendAsync("\\会话");
-        foreach (var text in new[] { "1", "0", "菜单", "/菜单", "取消", "帮我分析这段代码" })
+        await fixture.SendAsync("/会话");
+        foreach (var text in new[] { "1", "0", "菜单", "取消", "帮我分析这段代码" })
             Assert.False(fixture.Send(text).IsCompleted);
+    }
+
+    [Theory]
+    [InlineData("/菜单")]
+    [InlineData("  /不存在  ")]
+    [InlineData("/状态 多余参数")]
+    public async Task UnknownSlashCommand_ReturnsHelpWithoutQueuingCodex(string text)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.SendAsync(text);
+        Assert.Contains("未识别的指令", fixture.LastText);
+        Assert.Contains("发送 / 查看可用指令", fixture.LastText);
     }
 
     [Fact]
     public async Task Commands_RespectGroupScopeAndDisabledBindings()
     {
         await using var fixture = await Fixture.CreateAsync();
-        await fixture.SendAsync("\\会话", "alice", "group-a");
+        await fixture.SendAsync("/会话", "alice", "group-a");
         Assert.False(fixture.Send("1", "bob", "group-a").IsCompleted);
         Assert.False(fixture.Send("1", "alice", "group-b").IsCompleted);
         Assert.False(fixture.Send("1", "alice").IsCompleted);
-        await fixture.SendAsync("\\状态", "alice", "group-a");
+        await fixture.SendAsync("/状态", "alice", "group-a");
         Assert.Contains("机器人：test", fixture.LastText);
         fixture.Bindings["screenshot"] = "";
-        await fixture.SendAsync("\\");
-        Assert.DoesNotContain("\\截图", fixture.LastText);
+        await fixture.SendAsync("/");
+        Assert.DoesNotContain("/截图", fixture.LastText);
         fixture.Bindings["status"] = "";
-        await fixture.SendAsync("\\状态");
+        await fixture.SendAsync("/状态");
         Assert.Contains("未识别的指令", fixture.LastText);
     }
 
@@ -110,12 +122,12 @@ public sealed class QqCommandTests
     public async Task NumericAnswersToCodex_DoNotBecomeCommands()
     {
         await using var fixture = await Fixture.CreateAsync();
-        await fixture.SendAsync("\\");
+        await fixture.SendAsync("/");
         var context = new ReplyContext("question", "alice");
         fixture.Codex.SetActiveToolContext(context);
         var question = fixture.Client.HandleMcpToolAsync(fixture.Codex, new McpToolRequest(McpToolKind.AskUser, "请选择 1 或 2"), fixture.Shutdown.Token);
         await fixture.Handler.QuestionSent.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await fixture.SendAsync("\\状态");
+        await fixture.SendAsync("/状态");
         Assert.Contains("机器人：test", fixture.LastText);
         await fixture.SendAsync("2");
         Assert.Equal("2", await question.WaitAsync(TimeSpan.FromSeconds(5)));
@@ -132,21 +144,21 @@ public sealed class QqCommandTests
         fixture.Sessions.Threads.Add(new("project", "已有项目会话", directory, DateTimeOffset.UtcNow));
         var context = new ReplyContext("running", "alice");
         fixture.Codex.SetActiveToolContext(context);
-        await fixture.SendAsync("\\切换工作区 relative/path");
+        await fixture.SendAsync("/切换工作区 relative/path");
         Assert.Contains("绝对路径", fixture.LastText);
-        await fixture.SendAsync("\\切换工作区 " + Path.Combine(fixture.DirectoryPath, "missing"));
+        await fixture.SendAsync("/切换工作区 " + Path.Combine(fixture.DirectoryPath, "missing"));
         Assert.Contains("目录不存在", fixture.LastText);
-        await fixture.SendAsync("\\切换工作区 " + '"' + directory + Path.DirectorySeparatorChar + '"');
+        await fixture.SendAsync("/切换工作区 " + '"' + directory + Path.DirectorySeparatorChar + '"');
         Assert.Contains("已有项目会话", fixture.LastText);
         Assert.Contains("共 1 项", fixture.LastText);
         Assert.DoesNotContain("会话 A", fixture.LastText);
         Assert.Null((await fixture.SelectionAsync()).ThreadId);
-        await fixture.SendAsync("\\切换 1");
+        await fixture.SendAsync("/切换 1");
         var selection = await fixture.SelectionAsync();
         Assert.Equal("project", selection.ThreadId);
         Assert.Equal(directory, selection.WorkDirectory);
         Assert.Same(context, fixture.Codex.ActiveToolContext);
-        await fixture.SendAsync("\\工作目录");
+        await fixture.SendAsync("/工作目录");
         Assert.Contains(directory, fixture.LastText);
         var reloaded = new BotConversationStateStore(Path.Combine(fixture.DirectoryPath, "conversation-state.json"));
         await reloaded.LoadAsync(default);
@@ -159,18 +171,18 @@ public sealed class QqCommandTests
     {
         await using var fixture = await Fixture.CreateAsync();
         fixture.Sessions.Threads.Clear();
-        await fixture.SendAsync("\\会话");
+        await fixture.SendAsync("/会话");
         Assert.Contains("共 0 项", fixture.LastText);
         fixture.Sessions.FailListing = true;
-        await fixture.SendAsync("\\会话");
+        await fixture.SendAsync("/会话");
         Assert.Contains("读取当前工作区的 Codex 会话失败", fixture.LastText);
     }
 
     [Theory]
-    [InlineData("\\会话 0", "用法：\\会话 [页码]")]
-    [InlineData("\\会话 abc", "用法：\\会话 [页码]")]
-    [InlineData("\\会话 99", "项目会话只有 1 页")]
-    [InlineData("\\模型列表 0", "用法：\\模型列表 [页码]")]
+    [InlineData("/会话 0", "用法：/会话 [页码]")]
+    [InlineData("/会话 abc", "用法：/会话 [页码]")]
+    [InlineData("/会话 99", "项目会话只有 1 页")]
+    [InlineData("/模型列表 0", "用法：/模型列表 [页码]")]
     public async Task InvalidListPage_ReturnsUsageWithoutWaitingForTasks(string command, string expected)
     {
         await using var fixture = await Fixture.CreateAsync();
