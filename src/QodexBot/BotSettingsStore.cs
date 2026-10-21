@@ -21,6 +21,7 @@ internal sealed class BotSettingsStore(string filePath)
             ["stop"] = "/停止",
             ["models"] = "/模型列表",
             ["switch-model"] = "/模型",
+            ["quota"] = "/额度",
             ["update-codex"] = "/更新Codex",
         };
 

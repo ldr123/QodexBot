@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 
 internal sealed partial class QqBotClient
 {
@@ -13,7 +14,7 @@ internal sealed partial class QqBotClient
         ["new-session"] = "新建会话", ["recent"] = "最近记录", ["current"] = "当前会话",
         ["rename"] = "重命名会话", ["workdir"] = "工作目录", ["switch-workspace"] = "切换工作区",
         ["screenshot"] = "发送截图", ["retry"] = "重试上一条", ["stop"] = "停止任务",
-        ["models"] = "模型列表", ["switch-model"] = "切换模型", ["update-codex"] = "更新 Codex CLI"
+        ["models"] = "模型列表", ["switch-model"] = "切换模型", ["quota"] = "Codex 额度", ["update-codex"] = "更新 Codex CLI"
     };
 
     private static readonly IReadOnlyDictionary<string, string> CommandArguments = new Dictionary<string, string>
@@ -131,6 +132,64 @@ internal sealed partial class QqBotClient
         if (pageNumber > 1) text += $"\n上一页：{command} {pageNumber - 1}";
         if (pageNumber < pageCount) text += $"\n下一页：{command} {pageNumber + 1}";
         await SendTextReplyAsync(context, text, token);
+    }
+
+    private async Task ShowQuotaAsync(ReplyContext context, CancellationToken token)
+    {
+        JsonElement snapshot;
+        await _codexControlLock.WaitAsync(token);
+        try { snapshot = await codex.ReadRateLimitsAsync(token); }
+        finally { _codexControlLock.Release(); }
+
+        var rows = new List<string>();
+        if (snapshot.TryGetProperty("rateLimitsByLimitId", out var buckets) && buckets.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var bucket in buckets.EnumerateObject())
+                AppendQuotaBucket(rows, bucket.Name, bucket.Value);
+        }
+        if (rows.Count == 0 && snapshot.TryGetProperty("rateLimits", out var fallback) && fallback.ValueKind == JsonValueKind.Object)
+            AppendQuotaBucket(rows, "codex", fallback);
+
+        if (rows.Count == 0) rows.Add("Codex 暂未返回可用额度窗口。");
+        if (snapshot.TryGetProperty("rateLimitResetCredits", out var resetCredits) &&
+            resetCredits.ValueKind == JsonValueKind.Object &&
+            resetCredits.TryGetProperty("availableCount", out var count) && count.ValueKind == JsonValueKind.Number)
+            rows.Add($"可用额度重置次数：{count.GetInt64()}");
+
+        var plan = snapshot.TryGetProperty("rateLimits", out var planLimits) &&
+            planLimits.ValueKind == JsonValueKind.Object && planLimits.TryGetProperty("planType", out var planType) &&
+            planType.ValueKind == JsonValueKind.String
+            ? planType.GetString() : null;
+        var response = "Codex 额度（当前登录账号）" + (string.IsNullOrWhiteSpace(plan) ? "" : $"\n方案：{plan}")
+            + "\n" + string.Join("\n", rows);
+        await SendTextReplyAsync(context, response, token);
+    }
+
+    private static void AppendQuotaBucket(List<string> rows, string id, JsonElement bucket)
+    {
+        if (bucket.ValueKind != JsonValueKind.Object) return;
+        var name = bucket.TryGetProperty("limitName", out var limitName) && limitName.ValueKind == JsonValueKind.String
+            ? limitName.GetString() : null;
+        var label = string.IsNullOrWhiteSpace(name) ? id : $"{name}（{id}）";
+        var hasWindow = false;
+        foreach (var property in new[] { "primary", "secondary" })
+        {
+            if (!bucket.TryGetProperty(property, out var window) || window.ValueKind != JsonValueKind.Object) continue;
+            hasWindow = true;
+            var windowName = property == "primary" ? "主要窗口" : "次要窗口";
+            if (window.TryGetProperty("windowDurationMins", out var duration) && duration.TryGetInt64(out var minutes))
+                windowName = minutes == 300 ? "5 小时" : minutes == 10080 ? "1 周" : $"{minutes} 分钟";
+            var used = window.TryGetProperty("usedPercent", out var usedPercent) && usedPercent.TryGetInt32(out var usedValue)
+                ? Math.Clamp(usedValue, 0, 100) : (int?)null;
+            var status = used is null ? "使用率未知" : $"剩余 {100 - used.Value}%（已用 {used.Value}%）";
+            if (window.TryGetProperty("resetsAt", out var resetsAt) && resetsAt.TryGetInt64(out var timestamp))
+            {
+                try { status += $"，重置时间 {DateTimeOffset.FromUnixTimeSeconds(timestamp).ToLocalTime():yyyy-MM-dd HH:mm}"; }
+                catch (ArgumentOutOfRangeException) { }
+            }
+            rows.Add($"{label} · {windowName}：{status}");
+        }
+        if (!hasWindow) rows.Add($"{label}：额度窗口暂不可用");
     }
 
     private static bool TryReadPage(string argument, out int pageNumber)

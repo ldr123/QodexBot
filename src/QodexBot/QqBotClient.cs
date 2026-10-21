@@ -296,6 +296,17 @@ internal sealed partial class QqBotClient(HttpClient http, BotConfig config, Cod
             await ShowModelsAsync(argument, context, cancellationToken);
             return;
         }
+        if (command == "quota")
+        {
+            try { await ShowQuotaAsync(context, cancellationToken); }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"读取 Codex 额度失败：{ex.Message}");
+                await SendTextReplyAsync(context, $"读取 Codex 额度失败：{Truncate(ex.Message, 300)}。请确认 Codex CLI 已登录并稍后重试。", cancellationToken);
+            }
+            return;
+        }
         if (command == "switch-workspace")
         {
             await SwitchWorkspaceAsync(argument, context, cancellationToken);

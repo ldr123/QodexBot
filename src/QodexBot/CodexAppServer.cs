@@ -150,6 +150,12 @@ internal sealed class CodexAppServer : IAsyncDisposable, ICodexSessionClient
             .ToArray();
     }
 
+    public async Task<JsonElement> ReadRateLimitsAsync(CancellationToken cancellationToken)
+    {
+        await StartAsync(cancellationToken);
+        return await SendRequestAsync("account/rateLimits/read", new JsonObject(), cancellationToken);
+    }
+
     public async Task<IReadOnlyList<CodexThreadSummary>> ListThreadsAsync(string workDirectory, CancellationToken cancellationToken)
     {
         await StartAsync(cancellationToken);
